@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { RankedItem, ComparisonState } from './types';
-import { loadState, saveState } from './utils/storage';
+import { loadStateSync, saveStateSync } from './utils/storage';
+import { loadItems, saveAllItems } from './utils/supabase';
 import { getComparisonsNeeded, processComparison, insertItemAtPosition } from './utils/ranking';
 import AddItemForm from './components/AddItemForm';
 import ComparisonView from './components/ComparisonView';
@@ -15,19 +16,47 @@ export default function Home() {
   const [comparisonState, setComparisonState] = useState<ComparisonState | null>(null);
   const [hasCompleted, setHasCompleted] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
 
+  // Load data on mount
   useEffect(() => {
-    const state = loadState();
-    setItems(state.items);
-    setHasCompleted(state.hasCompleted);
-    setMounted(true);
+    const init = async () => {
+      // Load from localStorage first (instant)
+      const localState = loadStateSync();
+      setItems(localState.items);
+      setHasCompleted(localState.hasCompleted);
+      setMounted(true);
+
+      // Then try to load from Supabase (async)
+      try {
+        const supabaseItems = await loadItems();
+        if (supabaseItems.length > 0) {
+          setItems(supabaseItems);
+          // Update localStorage with Supabase data
+          saveStateSync({ items: supabaseItems, hasCompleted: localState.hasCompleted });
+        }
+      } catch (error) {
+        console.error('Failed to load from Supabase:', error);
+      }
+    };
+
+    init();
   }, []);
 
-  useEffect(() => {
-    if (mounted) {
-      saveState({ items, hasCompleted });
+  // Save to both localStorage and Supabase when items change
+  const syncToSupabase = useCallback(async (newItems: RankedItem[]) => {
+    // Save to localStorage immediately
+    saveStateSync({ items: newItems, hasCompleted });
+
+    // Sync to Supabase in background
+    setIsSyncing(true);
+    try {
+      await saveAllItems(newItems);
+    } catch (error) {
+      console.error('Failed to sync to Supabase:', error);
     }
-  }, [items, hasCompleted, mounted]);
+    setIsSyncing(false);
+  }, [hasCompleted]);
 
   const handleAddItem = (name: string, image?: string, category?: string) => {
     const newItem: RankedItem = {
@@ -41,7 +70,9 @@ export default function Home() {
 
     if (items.length === 0) {
       newItem.position = 0;
-      setItems([newItem]);
+      const newItems = [newItem];
+      setItems(newItems);
+      syncToSupabase(newItems);
     } else {
       const { comparisons, low, high } = getComparisonsNeeded(items);
       setComparisonState({
@@ -70,6 +101,7 @@ export default function Home() {
       const updatedItems = insertItemAtPosition(items, comparisonState.itemToRank, result.finalPosition);
       setItems(updatedItems);
       setComparisonState(null);
+      syncToSupabase(updatedItems);
     } else {
       setComparisonState({
         ...comparisonState,
@@ -83,6 +115,7 @@ export default function Home() {
 
   const handleComplete = () => {
     setHasCompleted(true);
+    saveStateSync({ items, hasCompleted: true });
     router.push('/final');
   };
 
@@ -116,6 +149,12 @@ export default function Home() {
                 <span className="text-xs font-semibold uppercase tracking-widest text-[var(--foreground-muted)]">
                   Official Rankings
                 </span>
+                {isSyncing && (
+                  <span className="flex items-center gap-1 text-xs text-[var(--accent-secondary)]">
+                    <div className="w-2 h-2 rounded-full bg-[var(--accent-secondary)] animate-pulse" />
+                    Syncing...
+                  </span>
+                )}
               </div>
               <h1 className="font-[family-name:var(--font-clash)] text-4xl sm:text-5xl md:text-6xl font-bold text-[var(--foreground)] tracking-tight">
                 Try <span className="bg-gradient-to-r from-[#ff7cba] via-[#b31d42] to-[#1aa0dc] bg-clip-text text-transparent">Things</span>

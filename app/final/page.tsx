@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { RankedItem, CATEGORIES } from '../types';
-import { loadState } from '../utils/storage';
+import { loadStateSync } from '../utils/storage';
 import { calculateScore } from '../utils/ranking';
 
 export default function FinalPage() {
@@ -12,7 +12,7 @@ export default function FinalPage() {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const state = loadState();
+    const state = loadStateSync();
     setItems(state.items);
     setMounted(true);
   }, []);

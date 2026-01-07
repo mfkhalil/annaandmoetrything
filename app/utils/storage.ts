@@ -1,35 +1,58 @@
 import { AppState, RankedItem } from '../types';
+import { loadItems, saveAllItems } from './supabase';
 
 const STORAGE_KEY = 'anna-moe-rankings';
 
 // ============================================
-// LOCAL STORAGE (works offline)
+// HYBRID STORAGE (LocalStorage + Supabase)
 // ============================================
 
-export function loadState(): AppState {
+export async function loadState(): Promise<AppState> {
   if (typeof window === 'undefined') {
     return { items: [], hasCompleted: false };
   }
-  
+
+  // Try Supabase first
+  try {
+    const supabaseItems = await loadItems();
+    if (supabaseItems.length > 0) {
+      // Sync to local storage as backup
+      const state = { items: supabaseItems, hasCompleted: false };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      return state;
+    }
+  } catch (error) {
+    console.error('Supabase load failed, falling back to localStorage:', error);
+  }
+
+  // Fall back to localStorage
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       return JSON.parse(saved);
     }
   } catch (error) {
-    console.error('Error loading state:', error);
+    console.error('Error loading from localStorage:', error);
   }
-  
+
   return { items: [], hasCompleted: false };
 }
 
-export function saveState(state: AppState): void {
+export async function saveState(state: AppState): Promise<void> {
   if (typeof window === 'undefined') return;
-  
+
+  // Always save to localStorage first (fast)
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (error) {
-    console.error('Error saving state:', error);
+    console.error('Error saving to localStorage:', error);
+  }
+
+  // Then sync to Supabase (async)
+  try {
+    await saveAllItems(state.items);
+  } catch (error) {
+    console.error('Error saving to Supabase:', error);
   }
 }
 
@@ -39,12 +62,42 @@ export function clearState(): void {
 }
 
 // ============================================
+// SYNC-ONLY LOCAL STORAGE (for immediate use)
+// ============================================
+
+export function loadStateSync(): AppState {
+  if (typeof window === 'undefined') {
+    return { items: [], hasCompleted: false };
+  }
+
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (error) {
+    console.error('Error loading state:', error);
+  }
+
+  return { items: [], hasCompleted: false };
+}
+
+export function saveStateSync(state: AppState): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    console.error('Error saving state:', error);
+  }
+}
+
+// ============================================
 // IMAGE UTILITIES
 // ============================================
 
 export function imageToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
-    // Validate file size (5MB max)
     if (file.size > 5 * 1024 * 1024) {
       reject(new Error('Image must be less than 5MB'));
       return;
@@ -64,7 +117,6 @@ export function compressImage(base64: string, maxWidth = 800): Promise<string> {
       const canvas = document.createElement('canvas');
       let { width, height } = img;
 
-      // Scale down if needed
       if (width > maxWidth) {
         height = (height * maxWidth) / width;
         width = maxWidth;
@@ -86,148 +138,6 @@ export function compressImage(base64: string, maxWidth = 800): Promise<string> {
     img.src = base64;
   });
 }
-
-// ============================================
-// SUPABASE CLIENT (for future integration)
-// ============================================
-
-// To use Supabase, install the client:
-// npm install @supabase/supabase-js
-
-/*
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-// ============================================
-// SUPABASE STORAGE FUNCTIONS
-// ============================================
-
-export async function loadFromSupabase(rankingId: string): Promise<RankedItem[]> {
-  const { data, error } = await supabase
-    .from('ranked_items')
-    .select('*')
-    .eq('ranking_id', rankingId)
-    .order('position', { ascending: true });
-
-  if (error) {
-    console.error('Error loading from Supabase:', error);
-    return [];
-  }
-
-  return data.map(item => ({
-    id: item.id,
-    name: item.name,
-    image: item.image_url,
-    category: item.category,
-    notes: item.notes,
-    position: item.position,
-    created_at: item.created_at,
-    updated_at: item.updated_at,
-  }));
-}
-
-export async function saveToSupabase(rankingId: string, items: RankedItem[]): Promise<boolean> {
-  // Delete existing items
-  const { error: deleteError } = await supabase
-    .from('ranked_items')
-    .delete()
-    .eq('ranking_id', rankingId);
-
-  if (deleteError) {
-    console.error('Error deleting items:', deleteError);
-    return false;
-  }
-
-  // Insert new items
-  const { error: insertError } = await supabase
-    .from('ranked_items')
-    .insert(
-      items.map(item => ({
-        ranking_id: rankingId,
-        name: item.name,
-        category: item.category,
-        image_url: item.image,
-        notes: item.notes,
-        position: item.position,
-      }))
-    );
-
-  if (insertError) {
-    console.error('Error inserting items:', insertError);
-    return false;
-  }
-
-  return true;
-}
-
-export async function uploadImage(file: File): Promise<string | null> {
-  const fileExt = file.name.split('.').pop();
-  const fileName = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}.${fileExt}`;
-  const filePath = `images/${fileName}`;
-
-  const { error: uploadError } = await supabase.storage
-    .from('item-images')
-    .upload(filePath, file);
-
-  if (uploadError) {
-    console.error('Error uploading image:', uploadError);
-    return null;
-  }
-
-  const { data } = supabase.storage
-    .from('item-images')
-    .getPublicUrl(filePath);
-
-  return data.publicUrl;
-}
-
-export async function createRanking(name: string, isPublic = false): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('rankings')
-    .insert({
-      name,
-      is_public: isPublic,
-      share_code: generateShareCode(),
-    })
-    .select('id')
-    .single();
-
-  if (error) {
-    console.error('Error creating ranking:', error);
-    return null;
-  }
-
-  return data.id;
-}
-
-export async function getRankingByShareCode(shareCode: string): Promise<RankedItem[] | null> {
-  const { data: ranking, error: rankingError } = await supabase
-    .from('rankings')
-    .select('id')
-    .eq('share_code', shareCode)
-    .single();
-
-  if (rankingError || !ranking) {
-    console.error('Error finding ranking:', rankingError);
-    return null;
-  }
-
-  return loadFromSupabase(ranking.id);
-}
-
-function generateShareCode(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let result = '';
-  for (let i = 0; i < 8; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
-*/
 
 // ============================================
 // EXPORT/IMPORT UTILITIES
@@ -252,7 +162,7 @@ export function importFromJSON(json: string): RankedItem[] | null {
     if (!data.items || !Array.isArray(data.items)) {
       return null;
     }
-    
+
     return data.items.map((item: { name: string; category?: string; position: number; notes?: string }, index: number) => ({
       id: `imported-${Date.now()}-${index}`,
       name: item.name,

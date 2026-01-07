@@ -57,7 +57,7 @@ export default function AddItemForm({ onSubmit }: AddItemFormProps) {
               type="button"
               onClick={() => setCategory(cat.id)}
               className={`
-                flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200
+                flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200
                 ${category === cat.id
                   ? 'bg-[var(--accent-primary)] text-white shadow-md'
                   : 'bg-[var(--background-secondary)] text-[var(--foreground-secondary)] hover:bg-[var(--background-tertiary)]'
@@ -65,7 +65,7 @@ export default function AddItemForm({ onSubmit }: AddItemFormProps) {
               `}
             >
               <span>{cat.icon}</span>
-              <span className="hidden sm:inline">{cat.label}</span>
+              <span>{cat.label}</span>
             </button>
           ))}
         </div>
